@@ -2,3 +2,4 @@ pyaudiowpatch
 faster-whisper
 numpy
 torch
+google-genai
