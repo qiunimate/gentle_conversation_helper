@@ -1,3 +1,4 @@
 pyaudiowpatch
+faster-whisper
 numpy
-faster_whisper
+torch
