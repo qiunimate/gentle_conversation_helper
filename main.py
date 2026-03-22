@@ -11,7 +11,7 @@ from tkinter import scrolledtext
 # --- Configuration ---
 TARGET_RATE = 16000
 PHRASE_TIMEOUT = 2.0        
-ENERGY_THRESHOLD = 0.005    
+ENERGY_THRESHOLD = 0.008    
 DEVICE = "cuda"             
 COMPUTE_TYPE = "float16"
 
@@ -83,15 +83,13 @@ class TranscriptionApp:
 
             phrase_time = datetime.utcnow()
             last_sample = np.array([], dtype=np.float32)
+            last_speech_time = datetime.utcnow() # Track last time we heard non-silent audio
 
             while True:
                 now = datetime.utcnow()
                 if not self.audio_queue.empty():
-                    phrase_complete = False
-                    if now - phrase_time > timedelta(seconds=PHRASE_TIMEOUT):
-                        phrase_complete = True
-                    phrase_time = now
-
+                    # 1. Gather all available audio from queue
+                    current_samples = np.array([], dtype=np.float32)
                     while not self.audio_queue.empty():
                         raw_data = self.audio_queue.get()
                         samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -99,16 +97,44 @@ class TranscriptionApp:
                             samples = samples.reshape(-1, channels).mean(axis=1)
                         if device_rate != TARGET_RATE: 
                             samples = samples[::int(device_rate / TARGET_RATE)]
-                        last_sample = np.concatenate([last_sample, samples])
+                        current_samples = np.concatenate([current_samples, samples])
 
-                    if np.max(np.abs(last_sample)) > ENERGY_THRESHOLD:
-                        segments, _ = self.model.transcribe(last_sample, beam_size=5, language="en")
+                    # 2. Check for speech activity (VAD)
+                    if np.max(np.abs(current_samples)) > ENERGY_THRESHOLD:
+                        last_speech_time = now
+                    
+                    last_sample = np.concatenate([last_sample, current_samples])
+
+                    # 3. Determine if phrase is complete based on silence duration
+                    phrase_complete = False
+                    is_silent = (now - last_speech_time > timedelta(seconds=PHRASE_TIMEOUT))
+                    if is_silent:
+                        phrase_complete = True
+
+                    # 4. Transcribe ONLY if we have actual speech energy in the buffer
+                    # This prevents Whisper from hallucinating during silence
+                    if len(last_sample) > 0 and np.max(np.abs(last_sample)) > ENERGY_THRESHOLD:
+                        # Only transcribe if we haven't already hit silence timeout
+                        # Or if we just finished a sentence
+                        segments, _ = self.model.transcribe(
+                            last_sample, 
+                            beam_size=5, 
+                            language="en",
+                            condition_on_previous_text=False
+                        )
                         text = "".join([s.text for s in segments]).strip()
 
-                        if text:
+                        # Filter out common hallucinations if the audio is mostly quiet
+                        hallucinations = ["thank you", "thanks for watching", "you", "bye", "subscribe", "you.", "thank you.", "bye."]
+                        is_hallucination = any(h == text.lower().strip() for h in hallucinations)
+                        
+                        if text and not (is_silent and is_hallucination):
                             self.update_ui(text, phrase_complete)
                             if phrase_complete:
                                 last_sample = np.array([], dtype=np.float32)
+                    elif phrase_complete:
+                        # If we've been silent long enough, clear the buffer even if no text was found
+                        last_sample = np.array([], dtype=np.float32)
                 time.sleep(0.1)
 
         except Exception as e:
@@ -122,21 +148,31 @@ class TranscriptionApp:
     def _render_text(self, text, is_final):
         self.text_area.configure(state='normal')
         
-        # Fix: Check if 'live_start' mark exists before deleting
+        # 1. Clear existing live text if any (always from the mark to the very end)
         if "live_start" in self.text_area.mark_names():
             self.text_area.delete("live_start", "end")
         
+        # Ensure we start on a new line
+        current_content = self.text_area.get("1.0", "end-1c")
+        if current_content and not current_content.endswith("\n"):
+                self.text_area.insert(tk.END, "\n")
+
         if is_final:
+            # 2. Append finalized text with a newline before the timestamp
             ts = datetime.now().strftime("[%H:%M:%S] ")
+            
             self.text_area.insert(tk.END, ts, "timestamp")
-            self.text_area.insert(tk.END, f"{text}\n\n", "final")
-            if "live_start" in self.text_area.mark_names():
-                self.text_area.mark_unset("live_start")
+            self.text_area.insert(tk.END, f"{text}\n", "final")
+            # Mark is gone for now as the sentence is finalized
+            self.text_area.mark_unset("live_start")
             self.text_area.see(tk.END)
         else:
-            self.text_area.mark_set("live_start", "insert")
+            # 3. Create/Reset the live section at the end (not using 'insert' which changes on click)
+            # We set the mark at 'end-1c' (just before the final newline)
+            self.text_area.mark_set("live_start", "end-1c")
             self.text_area.mark_gravity("live_start", tk.LEFT)
             self.text_area.insert(tk.END, f"LIVE >> {text}", "live")
+            # Optional: only auto-scroll if user is near the bottom
             self.text_area.see(tk.END)
             
         self.text_area.configure(state='disabled')
