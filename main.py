@@ -1,18 +1,31 @@
 import pyaudiowpatch as pyaudio
 from faster_whisper import WhisperModel
 import numpy as np
-import os
+from queue import Queue
+from datetime import datetime, timedelta
+import time
+import sys
+from colorama import init, Fore
 
-# 1. 强制使用 16000Hz (Whisper 标准)
+init(autoreset=True)
+
+# --- 参数配置 ---
 TARGET_RATE = 16000
-CHUNK_SIZE = 1024 * 4  # 每次读取的块大小
+CHUNK_SIZE = 1024           # the size of each audio chunk
+PHRASE_TIMEOUT = 2.0        # the timeout for a phrase (2 seconds of silence)
+RECORD_TIMEOUT = 1.0        # the interval for processing the buffer (1 second)
+ENERGY_THRESHOLD = 0.005    # the energy threshold for detecting sound (0.005)
+DEVICE = "cuda"             # use GPU (RTX 3060)
+COMPUTE_TYPE = "float16"
 
-model = WhisperModel("small", device="cuda", compute_type="float16")
+# Load the model
+print(f"{Fore.YELLOW}loading Whisper...{Fore.RESET}")
+model = WhisperModel("medium.en", device=DEVICE, compute_type=COMPUTE_TYPE)
 
-def start_listening():
+def start_engine():
     p = pyaudio.PyAudio()
     
-    # 找到正确的 Loopback 设备
+    # 1. find the default speakers (WASAPI Loopback)
     wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
     
@@ -22,47 +35,85 @@ def start_listening():
             loopback_device = loopback
             break
 
-    # 获取设备原生的采样率（通常是 48000）和声道数（通常是 2）
+    if not loopback_device:
+        print(f"{Fore.RED}could not find loopback device!{Fore.RESET}")
+        return
+
+    # 2. audio configuration
     device_rate = int(loopback_device["defaultSampleRate"])
     channels = loopback_device["maxInputChannels"]
+    
+    data_queue = Queue()
+    
+    def callback(in_data, frame_count, time_info, status):
+        data_queue.put(in_data)
+        return (None, pyaudio.paContinue)
 
-    print(f"正在监听设备: {loopback_device['name']}")
-    print(f"原始采样率: {device_rate}, 声道数: {channels}")
+    # 3. start the audio stream
+    stream = p.open(format=pyaudio.paInt16, 
+                    channels=channels, 
+                    rate=device_rate,
+                    input=True, 
+                    input_device_index=loopback_device["index"],
+                    stream_callback=callback)
 
-    stream = p.open(format=pyaudio.paInt16,
-                    channels=channels,
-                    rate=device_rate,  # 必须用设备原生的采样率打开
-                    input=True,
-                    input_device_index=loopback_device["index"])
+    print(f"{Fore.CYAN}>>> system audio capture started. listening...{Fore.RESET}\n")
 
-    audio_buffer = []
+    # --- logic variables ---
+    phrase_time = datetime.utcnow()
+    last_sample = np.array([], dtype=np.float32)
+    
+    try:
+        while True:
+            now = datetime.utcnow()
+            
+            if not data_queue.empty():
+                phrase_complete = False
+                
+                # check if the phrase is complete
+                if now - phrase_time > timedelta(seconds=PHRASE_TIMEOUT):
+                    phrase_complete = True
+                
+                phrase_time = now
 
-    while True:
-        # 读取约 3 秒的数据量
-        # 数据量 = 采样率 * 声道数 * 秒数
-        raw_data = stream.read(device_rate * 3)
-        
-        # 将字节转为 Int16，再归一化到 Float32
-        samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-        
-        # 【关键步骤 1】如果是多声道，合并为单声道
-        if channels > 1:
-            samples = samples.reshape(-1, channels).mean(axis=1)
-        
-        # 【关键步骤 2】如果采样率不是 16000，必须进行重采样
-        # 简单粗暴的降采样（如果 device_rate 是 48000，即每 3 个点取 1 个）
-        if device_rate != TARGET_RATE:
-            samples = samples[::int(device_rate / TARGET_RATE)]
+                # extract all audio data from the queue
+                while not data_queue.empty():
+                    raw_data = data_queue.get()
+                    # convert to floating point and normalize
+                    samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+                    # convert multi-channel to mono
+                    if channels > 1:
+                        samples = samples.reshape(-1, channels).mean(axis=1)
+                    # resample to 16000Hz
+                    if device_rate != TARGET_RATE:
+                        samples = samples[::int(device_rate / TARGET_RATE)]
+                    
+                    last_sample = np.concatenate([last_sample, samples])
 
-        # 再次检查音量峰值
-        peak = np.max(np.abs(samples))
-        if peak < 0.01: # 过滤太小的声音
-            continue
+                # only transcribe when the volume exceeds the threshold to avoid phantom listening
+                if np.max(np.abs(last_sample)) > ENERGY_THRESHOLD:
+                    # transcribe the audio
+                    segments, _ = model.transcribe(last_sample, beam_size=5, language="en")
+                    text = "".join([s.text for s in segments]).strip()
 
-        # 3. 运行识别
-        segments, _ = model.transcribe(samples, beam_size=5, vad_filter=True, language="en")
-        for segment in segments:
-            print(f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text}")
+                    # real-time output (refresh on the same line)
+                    sys.stdout.write(f"\r{Fore.GREEN}Listening: {text}\033[K")
+                    sys.stdout.flush()
+
+                    # if the sentence is complete, print the final result and clear the buffer
+                    if phrase_complete and text:
+                        print(f"\n{Fore.WHITE}✓ {text}{Fore.RESET}")
+                        last_sample = np.array([], dtype=np.float32)
+                
+            else:
+                time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}stopping...{Fore.RESET}")
+    finally:
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
 
 if __name__ == "__main__":
-    start_listening()
+    start_engine()
