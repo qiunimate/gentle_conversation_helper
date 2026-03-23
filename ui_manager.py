@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import scrolledtext
 from datetime import datetime
+import threading
+import re
 
 class UIManager:
     def __init__(self, root):
@@ -82,7 +84,6 @@ class UIManager:
         # 2. Extract full text and clean it for context
         full_raw_text = self.text_area.get("1.0", "end-1c")
         
-        import re
         # Clean timestamps [HH:MM:SS] and "LIVE >>" markers
         cleaned_text = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\s*", "", full_raw_text)
         cleaned_text = cleaned_text.replace("LIVE >>", "")
@@ -94,6 +95,14 @@ class UIManager:
 
         if not context_string:
             print("No text found to send to Gemini.")
+            # print warning info
+            self.ensure_gemini_window()
+            self.gemini_text_area.configure(state='normal')
+            ts = datetime.now().strftime("[%H:%M:%S] ")
+            self.gemini_text_area.insert(tk.END, ts, "timestamp")
+            self.gemini_text_area.insert(tk.END, "[Warning]: No text found to send to Gemini.\n", "gemini_label")
+            self.gemini_text_area.configure(state='disabled')
+            self.gemini_text_area.see(tk.END)
             return
 
         # For the UI display, we'll show the start and end of the context
@@ -112,7 +121,6 @@ class UIManager:
         self.gemini_text_area.see(tk.END)
 
         # 4. Call Gemini in a separate thread with the full 200-word context
-        import threading
         def call_api():
             try:
                 print(f"Calling Gemini with {len(context_words)} words of context.")
