@@ -9,6 +9,10 @@ class UIManager:
         self.root.geometry("900x700")
         self.gemini_helper = None # To be set by main.py
         
+        # Gemini Window references
+        self.gemini_window = None
+        self.gemini_text_area = None
+
         # Main Layout
         self.main_frame = tk.Frame(root, bg="#1e1e1e")
         self.main_frame.pack(expand=True, fill='both')
@@ -38,49 +42,86 @@ class UIManager:
         self.text_area.tag_config("final", foreground="#4ec9b0") 
         self.text_area.tag_config("live", foreground="#ce9178")  
         self.text_area.tag_config("timestamp", foreground="#858585")
-        self.text_area.tag_config("gemini_label", foreground="#c586c0", font=("Consolas", 11, "bold"))
-        self.text_area.tag_config("gemini_text", foreground="#9cdcfe", background="#2a2a2a")
+
+        # Initialize Gemini window at startup
+        self.ensure_gemini_window()
+
+    def ensure_gemini_window(self):
+        """Creates or restores the separate Gemini window."""
+        if self.gemini_window is None or not self.gemini_window.winfo_exists():
+            self.gemini_window = tk.Toplevel(self.root)
+            self.gemini_window.title("Gemini Assistant - Q&A")
+            self.gemini_window.geometry("600x600")
+            self.gemini_window.configure(bg="#1e1e1e")
+            
+            # Gemini window text area setup
+            self.gemini_text_area = scrolledtext.ScrolledText(
+                self.gemini_window, wrap=tk.WORD, font=("Consolas", 11), 
+                bg="#1e1e1e", fg="#d4d4d4", insertbackground="white"
+            )
+            self.gemini_text_area.pack(expand=True, fill='both', padx=10, pady=10)
+            
+            # Tags for styling Gemini window
+            self.gemini_text_area.tag_config("gemini_label", foreground="#c586c0", font=("Consolas", 11, "bold"))
+            self.gemini_text_area.tag_config("gemini_text", foreground="#9cdcfe", background="#2a2a2a")
+            self.gemini_text_area.tag_config("timestamp", foreground="#858585")
+            self.gemini_text_area.configure(state='disabled')
+        
+        # Bring to front
+        self.gemini_window.deiconify()
+        self.gemini_window.lift()
 
     def on_ask_gemini(self):
         if not self.gemini_helper:
+            print("Gemini Helper not initialized!")
             return
 
-        # 1. Extract context from text area
-        # We take the last few lines to find the "question"
+        # 1. Ensure Gemini window is open
+        self.ensure_gemini_window()
+
+        # 2. Extract context from text area
+        # We need to make sure we're getting text correctly
         full_text = self.text_area.get("1.0", "end-1c")
         lines = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("LIVE >>")]
         
         if not lines:
+            print("No finalized lines found to send to Gemini.")
             return
 
-        # Simple logic: take the last non-empty finalized line as the question
         last_context = lines[-1]
-        
-        # If the line starts with a timestamp [HH:MM:SS], strip it
         import re
         prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", last_context)
 
-        # 2. Show loading state in UI
-        self.text_area.configure(state='normal')
-        self.text_area.insert(tk.END, f"\n[Question]: \"{prompt}\"...\n", "gemini_label")
-        self.text_area.configure(state='disabled')
-        self.text_area.see(tk.END)
+        # 3. Show question in Gemini window
+        self.gemini_text_area.configure(state='normal')
+        ts = datetime.now().strftime("[%H:%M:%S] ")
+        self.gemini_text_area.insert(tk.END, ts, "timestamp")
+        self.gemini_text_area.insert(tk.END, f"[Question]: \"{prompt}\"...\n", "gemini_label")
+        self.gemini_text_area.configure(state='disabled')
+        self.gemini_text_area.update_idletasks() # Force UI update
+        self.gemini_text_area.see(tk.END)
 
-        # 3. Call Gemini in a separate thread to avoid freezing UI
+        # 4. Call Gemini in a separate thread
         import threading
         def call_api():
-            response = self.gemini_helper.generate_response(f"The following is a part of an interview transcription. Please answer the last question concisely as if you are the interviewee. Context: {prompt}")
-            self.root.after(0, self._display_gemini_response, response)
+            try:
+                print(f"Calling Gemini with prompt: {prompt}")
+                response = self.gemini_helper.generate_response(f"The following is a part of an interview transcription. Please answer the last question concisely as if you are the interviewee. Context: {prompt}")
+                print(f"Gemini response received: {response[:50]}...")
+                self.root.after(0, self._display_gemini_response, response)
+            except Exception as e:
+                print(f"Error calling Gemini API: {e}")
+                self.root.after(0, lambda: self._display_gemini_response(f"Error: {str(e)}"))
 
         threading.Thread(target=call_api, daemon=True).start()
 
     def _display_gemini_response(self, response):
-        self.text_area.configure(state='normal')
-        # Replace the thinking message or just append
-        self.text_area.insert(tk.END, f"[Answer]: ", "gemini_label")
-        self.text_area.insert(tk.END, f"{response}\n\n", "gemini_text")
-        self.text_area.configure(state='disabled')
-        self.text_area.see(tk.END)
+        self.ensure_gemini_window()
+        self.gemini_text_area.configure(state='normal')
+        self.gemini_text_area.insert(tk.END, f"[Answer]: ", "gemini_label")
+        self.gemini_text_area.insert(tk.END, f"{response}\n\n", "gemini_text")
+        self.gemini_text_area.configure(state='disabled')
+        self.gemini_text_area.see(tk.END)
 
     def update_ui(self, text, is_final):
         self.root.after(0, self._render_text, text, is_final)
