@@ -1,6 +1,7 @@
 import tkinter as tk
 from audio_processor import AudioProcessor
 from ui_manager import UIManager
+from gemini_helper import GeminiHelper
 
 # --- Configuration ---
 TARGET_RATE = 16000         # Target sample rate for Whisper model
@@ -15,6 +16,13 @@ if __name__ == "__main__":
     
     # Initialize UI and Audio components
     ui = UIManager(root)
+    
+    # Initialize Gemini
+    try:
+        ui.gemini_helper = GeminiHelper()
+    except Exception as e:
+        print(f"Warning: Gemini not initialized: {e}")
+
     processor = AudioProcessor(
         model_name=MODEL_NAME, 
         device=DEVICE, 

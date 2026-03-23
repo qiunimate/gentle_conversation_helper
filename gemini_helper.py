@@ -2,6 +2,9 @@ from google import genai
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
+
 class GeminiHelper:
     def __init__(self, api_key=None, model_id="gemini-3-flash-preview"):
         """
@@ -36,8 +39,6 @@ class GeminiHelper:
 
 # Simple usage example
 if __name__ == "__main__":
-    # Load environment variables from .env file
-    load_dotenv()
     helper = GeminiHelper()
     result = helper.generate_response("Why 30-year-old woman has shit-leaking issue?")
     print(f"Gemini Response:")
