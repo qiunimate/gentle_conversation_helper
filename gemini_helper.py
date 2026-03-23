@@ -1,15 +1,21 @@
 from google import genai
 import os
+from dotenv import load_dotenv
 
 class GeminiHelper:
     def __init__(self, api_key=None, model_id="gemini-3-flash-preview"):
         """
         Initializes the Gemini client.
-        :param api_key: Your Google AI API Key.
+        :param api_key: Your Google AI API Key. If None, it will look for GEMINI_API_KEY in the environment.
         :param model_id: The Gemini model ID to use.
         """
-        # Use provided key or fall back to an environment variable or default
-        self.api_key = api_key
+        # 1. Prioritize provided api_key
+        # 2. Then look for GEMINI_API_KEY in .env/environment
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("No Gemini API key found. Please provide one or set GEMINI_API_KEY in your .env file.")
+            
         self.model_id = model_id
         self.client = genai.Client(api_key=self.api_key)
 
@@ -30,6 +36,9 @@ class GeminiHelper:
 
 # Simple usage example
 if __name__ == "__main__":
+    # Load environment variables from .env file
+    load_dotenv()
     helper = GeminiHelper()
-    result = helper.generate_response("Who is the GOAT badminton player?")
-    print(f"Gemini Response: {result}")
+    result = helper.generate_response("Why 30-year-old woman has shit-leaking issue?")
+    print(f"Gemini Response:")
+    print(result)
