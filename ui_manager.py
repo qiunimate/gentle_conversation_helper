@@ -79,50 +79,50 @@ class UIManager:
         # 1. Ensure Gemini window is open
         self.ensure_gemini_window()
 
-        # 2. Extract context from text area (including live text)
-        full_text = self.text_area.get("1.0", "end-1c")
-        lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+        # 2. Extract full text and clean it for context
+        full_raw_text = self.text_area.get("1.0", "end-1c")
         
-        if not lines:
+        import re
+        # Clean timestamps [HH:MM:SS] and "LIVE >>" markers
+        cleaned_text = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\s*", "", full_raw_text)
+        cleaned_text = cleaned_text.replace("LIVE >>", "")
+        
+        # Split into words and get last 200
+        words = cleaned_text.split()
+        context_words = words[-200:] if len(words) > 200 else words
+        context_string = " ".join(context_words)
+
+        if not context_string:
             print("No text found to send to Gemini.")
             return
 
-        # Get the very last line, whether it's LIVE or Finalized
-        last_line = lines[-1]
+        # For the UI display, we'll show the start and end of the context
+        start_snippet = " ".join(context_words[:10]) if len(context_words) > 10 else " ".join(context_words)
+        end_snippet = " ".join(context_words[-15:]) if len(context_words) > 15 else ""
         
-        import re
-        # If it's a LIVE line, strip the "LIVE >> " prefix
-        if last_line.startswith("LIVE >>"):
-            prompt = last_line.replace("LIVE >>", "").strip()
-        else:
-            # If it's a finalized line, strip the timestamp [HH:MM:SS]
-            prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", last_line)
+        display_summary = f"\"{start_snippet} ... {end_snippet}\"" if end_snippet else f"\"{start_snippet}\""
 
-        # If the last line was empty after stripping (e.g. just "LIVE >> "), 
-        # try the previous finalized line if available
-        if not prompt and len(lines) > 1:
-            prev_line = lines[-2]
-            prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", prev_line)
-
-        if not prompt:
-            print("No valid prompt extracted.")
-            return
-
-        # 3. Show question in Gemini window
+        # 3. Show context summary in Gemini window
         self.gemini_text_area.configure(state='normal')
         ts = datetime.now().strftime("[%H:%M:%S] ")
         self.gemini_text_area.insert(tk.END, ts, "timestamp")
-        self.gemini_text_area.insert(tk.END, f"[Question]: \"{prompt}\"...\n", "gemini_label")
+        self.gemini_text_area.insert(tk.END, f"[Context (Last {len(context_words)} words)]: {display_summary}\n", "gemini_label")
         self.gemini_text_area.configure(state='disabled')
-        self.gemini_text_area.update_idletasks() # Force UI update
+        self.gemini_text_area.update_idletasks()
         self.gemini_text_area.see(tk.END)
 
-        # 4. Call Gemini in a separate thread
+        # 4. Call Gemini in a separate thread with the full 200-word context
         import threading
         def call_api():
             try:
-                print(f"Calling Gemini with prompt: {prompt}")
-                response = self.gemini_helper.generate_response(f"The following is a part of an interview transcription. Please answer the last question concisely as if you are the interviewee. Context: {prompt}")
+                print(f"Calling Gemini with {len(context_words)} words of context.")
+                prompt = (
+                    "The following is the last 200 words of an interview transcription. "
+                    "Please analyze the conversation and provide a concise, professional answer "
+                    "to the most recent question or topic being discussed, acting as the interviewee. "
+                    f"Context: {context_string}"
+                )
+                response = self.gemini_helper.generate_response(prompt)
                 print(f"Gemini response received: {response[:50]}...")
                 self.root.after(0, self._display_gemini_response, response)
             except Exception as e:
