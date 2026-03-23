@@ -79,18 +79,34 @@ class UIManager:
         # 1. Ensure Gemini window is open
         self.ensure_gemini_window()
 
-        # 2. Extract context from text area
-        # We need to make sure we're getting text correctly
+        # 2. Extract context from text area (including live text)
         full_text = self.text_area.get("1.0", "end-1c")
-        lines = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("LIVE >>")]
+        lines = [l.strip() for l in full_text.split("\n") if l.strip()]
         
         if not lines:
-            print("No finalized lines found to send to Gemini.")
+            print("No text found to send to Gemini.")
             return
 
-        last_context = lines[-1]
+        # Get the very last line, whether it's LIVE or Finalized
+        last_line = lines[-1]
+        
         import re
-        prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", last_context)
+        # If it's a LIVE line, strip the "LIVE >> " prefix
+        if last_line.startswith("LIVE >>"):
+            prompt = last_line.replace("LIVE >>", "").strip()
+        else:
+            # If it's a finalized line, strip the timestamp [HH:MM:SS]
+            prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", last_line)
+
+        # If the last line was empty after stripping (e.g. just "LIVE >> "), 
+        # try the previous finalized line if available
+        if not prompt and len(lines) > 1:
+            prev_line = lines[-2]
+            prompt = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", prev_line)
+
+        if not prompt:
+            print("No valid prompt extracted.")
+            return
 
         # 3. Show question in Gemini window
         self.gemini_text_area.configure(state='normal')
