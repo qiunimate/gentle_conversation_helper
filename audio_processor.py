@@ -24,10 +24,40 @@ class AudioProcessor:
         default_output_index = wasapi_info["defaultOutputDevice"]
         default_speakers = p.get_device_info_by_index(default_output_index)
         
-        for loopback in p.get_loopback_device_info_generator():
-            if default_speakers["name"] in loopback["name"]:
-                return loopback
-        return None
+        print(f"--- WASAPI Audio Devices ---")
+        print(f"Default Output Device: {default_speakers['name']} (Index: {default_output_index})")
+        
+        loopback_devices = list(p.get_loopback_device_info_generator())
+        if not loopback_devices:
+            print("Error: No WASAPI loopback devices found. Please ensure WASAPI is supported on your system.")
+            return None
+
+        print(f"Found {len(loopback_devices)} loopback devices:")
+        target_device = None
+        
+        # 1. First try to find a match for the system's default output device
+        speaker_name = default_speakers["name"].split('(')[0].strip()
+        for loopback in loopback_devices:
+            print(f" - {loopback['name']} (Index: {loopback['index']})")
+            if speaker_name in loopback["name"]:
+                target_device = loopback
+                print(f"Match found for default output! Using: {loopback['name']}")
+                break
+        
+        # 2. If no match for default, prioritize any device with "Headphones" in name
+        if not target_device:
+            for loopback in loopback_devices:
+                if "Headphones" in loopback["name"] or "Headset" in loopback["name"]:
+                    target_device = loopback
+                    print(f"Match found for Headphones/Headset! Using: {loopback['name']}")
+                    break
+                    
+        # 3. Final Fallback: Just take the first loopback device
+        if not target_device:
+            target_device = loopback_devices[0]
+            print(f"Warning: No exact match found. Falling back to first loopback: {target_device['name']}")
+            
+        return target_device
 
     def start_capture(self, callback_ui):
         self.is_running = True
@@ -67,8 +97,17 @@ class AudioProcessor:
                         raw_data = self.audio_queue.get()
                         samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
                         if channels > 1: samples = samples.reshape(-1, channels).mean(axis=1)
-                        if device_rate != self.target_rate: 
-                            samples = samples[::int(device_rate / self.target_rate)]
+                        
+                        # Robust resampling: using linear interpolation if rates don't match
+                        if device_rate != self.target_rate and len(samples) > 0:
+                            new_len = int(len(samples) * self.target_rate / device_rate)
+                            if new_len > 0:
+                                x_old = np.linspace(0, 1, len(samples))
+                                x_new = np.linspace(0, 1, new_len)
+                                samples = np.interp(x_new, x_old, samples)
+                            else:
+                                samples = np.array([], dtype=np.float32)
+                            
                         current_samples = np.concatenate([current_samples, samples])
 
                     if np.max(np.abs(current_samples)) > self.energy_threshold:
