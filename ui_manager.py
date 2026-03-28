@@ -3,6 +3,8 @@ from tkinter import scrolledtext
 from datetime import datetime
 import threading
 import re
+import json
+import os
 
 class UIManager:
     def __init__(self, root):
@@ -30,15 +32,8 @@ class UIManager:
         self.control_frame = tk.Frame(self.main_frame, bg="#1e1e1e")
         self.control_frame.pack(fill='x', padx=10, pady=(0, 10))
 
-        self.ask_button = tk.Button(
-            self.control_frame, text="Ask Gemini (Alt+G)", command=self.on_ask_gemini,
-            bg="#333333", fg="white", activebackground="#444444", activeforeground="white",
-            relief=tk.FLAT, padx=10, pady=5
-        )
-        self.ask_button.pack(side=tk.LEFT)
-
-        # Bind shortcut
-        self.root.bind('<Alt-g>', lambda e: self.on_ask_gemini())
+        # Dynamic Buttons from JSON
+        self.load_dynamic_buttons()
 
         # Tags for styling
         self.text_area.tag_config("final", foreground="#4ec9b0") 
@@ -47,6 +42,100 @@ class UIManager:
 
         # Initialize Gemini window at startup
         self.ensure_gemini_window()
+
+    def load_dynamic_buttons(self):
+        """Loads button configurations from buttons_config.json and creates UI elements."""
+        config_path = os.path.join(os.path.dirname(__file__), "buttons_config.json")
+        if not os.path.exists(config_path):
+            print(f"Warning: {config_path} not found. No dynamic buttons loaded.")
+            return
+
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.button_configs = json.load(f)
+            
+            for config in self.button_configs:
+                btn_name = config.get("name", "Button")
+                btn_id = config.get("id")
+                shortcut = config.get("shortcut")
+                
+                # Create button
+                btn = tk.Button(
+                    self.control_frame, text=btn_name, 
+                    command=lambda c=config: self.handle_gemini_request(c),
+                    bg="#333333", fg="white", activebackground="#444444", activeforeground="white",
+                    relief=tk.FLAT, padx=10, pady=5
+                )
+                btn.pack(side=tk.LEFT, padx=(0, 5))
+
+                # Bind shortcut if provided
+                if shortcut:
+                    self.root.bind(shortcut, lambda e, c=config: self.handle_gemini_request(c))
+                    
+        except Exception as e:
+            print(f"Error loading button configuration: {e}")
+
+    def get_last_200_words(self):
+        """Helper to extract and clean the last 200 words from the text area."""
+        full_raw_text = self.text_area.get("1.0", "end-1c")
+        
+        # Clean timestamps [HH:MM:SS] and "LIVE >>" markers
+        cleaned_text = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\s*", "", full_raw_text)
+        cleaned_text = cleaned_text.replace("LIVE >>", "")
+        
+        # Split into words and get last 200
+        words = cleaned_text.split()
+        context_words = words[-200:] if len(words) > 200 else words
+        return " ".join(context_words), len(context_words), context_words
+
+    def handle_gemini_request(self, config):
+        """Unified handler for Gemini requests based on JSON configuration."""
+        if not self.gemini_helper:
+            print("Gemini Helper not initialized!")
+            return
+
+        # 1. Ensure Gemini window is open
+        self.ensure_gemini_window()
+
+        # 2. Get context
+        context_string, word_count, context_words = self.get_last_200_words()
+
+        if not context_string:
+            self.gemini_text_area.configure(state='normal')
+            ts = datetime.now().strftime("[%H:%M:%S] ")
+            self.gemini_text_area.insert(tk.END, ts, "timestamp")
+            self.gemini_text_area.insert(tk.END, "No text found for context.\n", "gemini_label")
+            self.gemini_text_area.configure(state='disabled')
+            self.gemini_text_area.see(tk.END)
+            return
+
+        # 3. Show UI feedback in Gemini window
+        start_snippet = " ".join(context_words[:10]) if len(context_words) > 10 else " ".join(context_words)
+        end_snippet = " ".join(context_words[-15:]) if len(context_words) > 15 else ""
+        display_summary = f"\"{start_snippet} ... {end_snippet}\"" if end_snippet else f"\"{start_snippet}\""
+
+        self.gemini_text_area.configure(state='normal')
+        ts = datetime.now().strftime("[%H:%M:%S] ")
+        self.gemini_text_area.insert(tk.END, ts, "timestamp")
+        label = f"[{config.get('name')} - Last {word_count} words]: {display_summary}\n"
+        self.gemini_text_area.insert(tk.END, label, "gemini_label")
+        self.gemini_text_area.configure(state='disabled')
+        self.gemini_text_area.update_idletasks()
+        self.gemini_text_area.see(tk.END)
+
+        # 4. Call Gemini in a thread
+        def call_api():
+            try:
+                prompt_template = config.get("prompt", "{context}")
+                final_prompt = prompt_template.replace("{context}", context_string)
+                
+                response = self.gemini_helper.generate_response(final_prompt)
+                self.root.after(0, self._display_gemini_response, response)
+            except Exception as e:
+                self.gemini_text_area.insert(tk.END, f"Error: {str(e)}\n", "gemini_label")
+                self.gemini_text_area.see(tk.END)
+
+        threading.Thread(target=call_api, daemon=True).start()
 
     def ensure_gemini_window(self):
         """Creates or restores the separate Gemini window."""
@@ -72,73 +161,6 @@ class UIManager:
         # Bring to front
         self.gemini_window.deiconify()
         self.gemini_window.lift()
-
-    def on_ask_gemini(self):
-        if not self.gemini_helper:
-            print("Gemini Helper not initialized!")
-            return
-
-        # 1. Ensure Gemini window is open
-        self.ensure_gemini_window()
-
-        # 2. Extract full text and clean it for context
-        full_raw_text = self.text_area.get("1.0", "end-1c")
-        
-        # Clean timestamps [HH:MM:SS] and "LIVE >>" markers
-        cleaned_text = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\s*", "", full_raw_text)
-        cleaned_text = cleaned_text.replace("LIVE >>", "")
-        
-        # Split into words and get last 200
-        words = cleaned_text.split()
-        context_words = words[-200:] if len(words) > 200 else words
-        context_string = " ".join(context_words)
-
-        if not context_string:
-            print("No text found to send to Gemini.")
-            # print warning info
-            self.ensure_gemini_window()
-            self.gemini_text_area.configure(state='normal')
-            ts = datetime.now().strftime("[%H:%M:%S] ")
-            self.gemini_text_area.insert(tk.END, ts, "timestamp")
-            self.gemini_text_area.insert(tk.END, "[Warning]: No text found to send to Gemini.\n", "gemini_label")
-            self.gemini_text_area.configure(state='disabled')
-            self.gemini_text_area.see(tk.END)
-            return
-
-        # For the UI display, we'll show the start and end of the context
-        start_snippet = " ".join(context_words[:10]) if len(context_words) > 10 else " ".join(context_words)
-        end_snippet = " ".join(context_words[-15:]) if len(context_words) > 15 else ""
-        
-        display_summary = f"\"{start_snippet} ... {end_snippet}\"" if end_snippet else f"\"{start_snippet}\""
-
-        # 3. Show context summary in Gemini window
-        self.gemini_text_area.configure(state='normal')
-        ts = datetime.now().strftime("[%H:%M:%S] ")
-        self.gemini_text_area.insert(tk.END, ts, "timestamp")
-        self.gemini_text_area.insert(tk.END, f"[Context (Last {len(context_words)} words)]: {display_summary}\n", "gemini_label")
-        self.gemini_text_area.configure(state='disabled')
-        self.gemini_text_area.update_idletasks()
-        self.gemini_text_area.see(tk.END)
-
-        # 4. Call Gemini in a separate thread with the full 200-word context
-        def call_api():
-            try:
-                print(f"Calling Gemini with {len(context_words)} words of context.")
-                prompt = (
-                    "The following is the last 200 words of an interview transcription. "
-                    "Please analyze the conversation and provide a concise, professional answer "
-                    "to the most recent question or topic being discussed, acting as the interviewee. "
-                    f"Context: {context_string}"
-                )
-                response = self.gemini_helper.generate_response(prompt)
-                print(f"Gemini response received: {response[:50]}...")
-                self.root.after(0, self._display_gemini_response, response)
-            except Exception as e:
-                print(f"Error calling Gemini API: {e}")
-                self.root.after(0, lambda: self._display_gemini_response(f"Error: {str(e)}"))
-
-        threading.Thread(target=call_api, daemon=True).start()
-
     def _display_gemini_response(self, response):
         self.ensure_gemini_window()
         self.gemini_text_area.configure(state='normal')

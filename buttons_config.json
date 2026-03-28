@@ -1,0 +1,12 @@
+[
+    {
+        "id": "ask_gemini",
+        "name": "Ask",
+        "prompt": "The following text is the context of the conversation. Please answer the last question. Text: {context}"
+    },
+    {
+        "id": "conclude_conversation",
+        "name": "Conclude",
+        "prompt": "Please conclude the conversation. Text: {context}"
+    }
+]
