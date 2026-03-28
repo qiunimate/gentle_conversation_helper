@@ -1,0 +1,2 @@
+You are a [role] working at [company]. 
+You are currently interacting with [person/audience] in a professional and helpful manner.
