@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, filedialog, messagebox
 from datetime import datetime
 import threading
 import re
@@ -73,9 +73,54 @@ class UIManager:
                 # Bind shortcut if provided
                 if shortcut:
                     self.root.bind(shortcut, lambda e, c=config: self.handle_gemini_request(c))
+            
+            # Add Save Button
+            save_btn = tk.Button(
+                self.control_frame, text="Save Conversation", 
+                command=self.on_save_conversation,
+                bg="#444444", fg="white", activebackground="#555555", activeforeground="white",
+                relief=tk.FLAT, padx=10, pady=5
+            )
+            save_btn.pack(side=tk.RIGHT, padx=(5, 0))
                     
         except Exception as e:
             print(f"Error loading button configuration: {e}")
+
+    def on_save_conversation(self):
+        """Saves both the conversation and Gemini answers to separate text files."""
+        conv_text = self.text_area.get("1.0", "end-1c")
+        llm_text = self.gemini_text_area.get("1.0", "end-1c") if self.gemini_text_area else ""
+
+        if not conv_text.strip() and not llm_text.strip():
+            messagebox.showwarning("Save Warning", "No content to save.")
+            return
+
+        # Generate base timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        
+        # Open directory selection dialog instead of file dialog
+        target_dir = filedialog.askdirectory(title="Select Folder to Save Conversation Logs")
+        
+        if target_dir:
+            saved_files = []
+            try:
+                # 1. Save Conversation
+                if conv_text.strip():
+                    conv_path = os.path.join(target_dir, f"{timestamp}-conversation.txt")
+                    with open(conv_path, "w", encoding="utf-8") as f:
+                        f.write(conv_text)
+                    saved_files.append(f"Conversation: {os.path.basename(conv_path)}")
+
+                # 2. Save LLM Answers
+                if llm_text.strip():
+                    llm_path = os.path.join(target_dir, f"{timestamp}-LLM-answers.txt")
+                    with open(llm_path, "w", encoding="utf-8") as f:
+                        f.write(llm_text)
+                    saved_files.append(f"LLM Answers: {os.path.basename(llm_path)}")
+
+                messagebox.showinfo("Success", "Files saved successfully to:\n" + target_dir + "\n\n" + "\n".join(saved_files))
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not save files: {e}")
 
     def get_last_200_words(self):
         """Helper to extract and clean the last 200 words from the text area."""
