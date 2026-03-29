@@ -65,6 +65,37 @@ class AudioProcessor:
         self.thread = threading.Thread(target=self._audio_loop, args=(callback_ui,), daemon=True)
         self.thread.start()
 
+    def is_hallucination_text(self, text):
+        """Checks if the transcribed text is a known Whisper hallucination or artifact."""
+        if not text:
+            return True
+            
+        text_lower = text.lower().strip()
+        
+        # 1. Exact matches for common hallucinations
+        hallucinations = [
+            "thank you", "thanks for watching", "you", "bye", "subscribe", 
+            "you.", "thank you.", "bye.", "subtitle by", "subtitles by",
+            "please subscribe", "be sure to subscribe"
+        ]
+        if text_lower in hallucinations:
+            return True
+            
+        # 2. Pattern check for repeating dots or single characters
+        # e.g., ". . . . . .", "........", "u u u u"
+        import re
+        
+        # Matches strings that are just dots and spaces
+        if re.match(r'^[.\s]+$', text_lower):
+            return True
+            
+        # Matches very short segments that don't look like speech (single chars repeating)
+        # but only if the overall length is small
+        if len(text_lower) < 5 and not any(c.isalpha() for c in text_lower):
+            return True
+            
+        return False
+
     def _audio_loop(self, callback_ui):
         p = pyaudio.PyAudio()
         try:
@@ -186,8 +217,7 @@ class AudioProcessor:
                         )
                         text = "".join([s.text for s in segments]).strip()
 
-                        hallucinations = ["thank you", "thanks for watching", "you", "bye", "subscribe", "you.", "thank you.", "bye."]
-                        is_hallucination = any(h == text.lower().strip() for h in hallucinations)
+                        is_hallucination = self.is_hallucination_text(text)
                         
                         if text and not (is_silent and is_hallucination):
                             callback_ui(text, phrase_complete, phrase_source)

@@ -6,7 +6,7 @@ from gemini_helper import GeminiHelper
 # --- Configuration ---
 TARGET_RATE = 16000         # Target sample rate for Whisper model
 PHRASE_TIMEOUT = 1.0        # Timeout for complete phrase in seconds
-ENERGY_THRESHOLD = 0.008    # Energy threshold for voice activity detection
+ENERGY_THRESHOLD = 0.01    # Energy threshold for voice activity detection
 MODEL_NAME = "base.en"    # Name of the Whisper model to use
 DEVICE = "cuda"             
 COMPUTE_TYPE = "float16"
