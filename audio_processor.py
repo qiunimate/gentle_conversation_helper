@@ -111,8 +111,8 @@ class AudioProcessor:
 
             last_sample = np.array([], dtype=np.float32)
             last_speech_time = datetime.utcnow()
-            current_source = "system" # Default source
-
+            phrase_source = "system" # Source for the entire current phrase
+            
             def process_raw_data(raw_data, rate, channels):
                 samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
                 if channels > 1: samples = samples.reshape(-1, channels).mean(axis=1)
@@ -145,10 +145,22 @@ class AudioProcessor:
                     out_energy = np.max(np.abs(out_samples)) if len(out_samples) > 0 else 0
                     in_energy = np.max(np.abs(in_samples)) if len(in_samples) > 0 else 0
                     
-                    if out_energy > in_energy and out_energy > self.energy_threshold:
-                        current_source = "system"
-                    elif in_energy > out_energy and in_energy > self.energy_threshold:
-                        current_source = "mic"
+                    # Determine current chunk source with a slight bias or sensitivity check
+                    # We use a multiplier for MIC energy because microphones are often quieter than system output
+                    mic_sensitivity_boost = 1.2 
+                    effective_in_energy = in_energy * mic_sensitivity_boost
+                    
+                    current_chunk_source = phrase_source # default
+                    if out_energy > effective_in_energy and out_energy > self.energy_threshold:
+                        current_chunk_source = "system"
+                    elif effective_in_energy > out_energy and effective_in_energy > self.energy_threshold:
+                        current_chunk_source = "mic"
+
+                    # If source changed and current buffer isn't empty, finalize the previous source
+                    source_switched = False
+                    if len(last_sample) > 0 and current_chunk_source != phrase_source and (out_energy > self.energy_threshold or in_energy > self.energy_threshold):
+                        source_switched = True
+                        print(f"Source switch detected: {phrase_source} -> {current_chunk_source}. Finalizing current phrase.")
 
                     if len(out_samples) > 0: mixed[:len(out_samples)] += out_samples
                     if len(in_samples) > 0: mixed[:len(in_samples)] += in_samples
@@ -157,13 +169,18 @@ class AudioProcessor:
 
                     if np.max(np.abs(current_samples)) > self.energy_threshold:
                         last_speech_time = now
+                        if len(last_sample) == 0:
+                            phrase_source = current_chunk_source # Set source for new phrase
                     
-                    last_sample = np.concatenate([last_sample, current_samples])
-                    
+                    # VAD and completion check
                     is_silent = (now - last_speech_time > timedelta(seconds=self.phrase_timeout))
-                    phrase_complete = is_silent
+                    phrase_complete = is_silent or source_switched
 
-                    if len(last_sample) > 0 and np.max(np.abs(last_sample)) > self.energy_threshold:
+                    # If we didn't switch, append to current sample
+                    if not source_switched:
+                        last_sample = np.concatenate([last_sample, current_samples])
+                    
+                    if len(last_sample) > 0 and (np.max(np.abs(last_sample)) > self.energy_threshold or phrase_complete):
                         segments, _ = self.model.transcribe(
                             last_sample, beam_size=5, language="en", condition_on_previous_text=False
                         )
@@ -173,13 +190,19 @@ class AudioProcessor:
                         is_hallucination = any(h == text.lower().strip() for h in hallucinations)
                         
                         if text and not (is_silent and is_hallucination):
-                            callback_ui(text, phrase_complete, current_source)
-                            if phrase_complete:
-                                last_sample = np.array([], dtype=np.float32)
-                                current_source = "system" # Reset source
+                            callback_ui(text, phrase_complete, phrase_source)
+                        
+                        if phrase_complete:
+                            last_sample = np.array([], dtype=np.float32)
+                            if source_switched:
+                                # After switch, start the new buffer with the current samples
+                                last_sample = current_samples
+                                phrase_source = current_chunk_source
+                                # Reset last_speech_time to now since we just started a new source
+                                last_speech_time = now
                     elif phrase_complete:
                         last_sample = np.array([], dtype=np.float32)
-                        current_source = "system" # Reset source
+                        phrase_source = "system" # Reset source
                 
                 time.sleep(0.1)
         finally:

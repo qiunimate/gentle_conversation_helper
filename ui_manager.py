@@ -36,11 +36,11 @@ class UIManager:
         self.load_dynamic_buttons()
 
         # Tags for styling
-        self.text_area.tag_config("system_final", foreground="#4ec9b0") # Greenish
-        self.text_area.tag_config("mic_final", foreground="#569cd6")    # Blueish
-        self.text_area.tag_config("system_live", foreground="#ce9178")  # Orangeish
-        self.text_area.tag_config("mic_live", foreground="#9cdcfe")     # Light Blueish
-        self.text_area.tag_config("timestamp", foreground="#858585")
+        self.text_area.tag_config("system_final", foreground="#4ec9b0", font=("Consolas", 11, "bold")) # Strong Greenish
+        self.text_area.tag_config("mic_final", foreground="#569cd6", font=("Consolas", 11, "bold"))    # Strong Blueish
+        self.text_area.tag_config("system_live", foreground="#ce9178", font=("Consolas", 11, "italic")) # Italic Orangeish
+        self.text_area.tag_config("mic_live", foreground="#9cdcfe", font=("Consolas", 11, "italic"))    # Italic Light Blueish
+        self.text_area.tag_config("timestamp", foreground="#858585", font=("Consolas", 9))
 
         # Initialize Gemini window at startup
         self.ensure_gemini_window()
